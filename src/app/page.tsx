@@ -1,6 +1,7 @@
 import MovieBrowser from "@/components/MovieBrowser";
 import { getPopularMovies, getMovieGenres } from "@/lib/tmdb";
 import WatchlistNavLink from "@/components/WatchlistNavLink";
+import AccountNav from "@/components/AccountNav";
 import {
   ArrowRight,
   Clapperboard,
@@ -11,11 +12,12 @@ import {
 
 export default async function Home() {
   const [movieData, genres] = await Promise.all([
-  getPopularMovies(),
-  getMovieGenres(),
-]);
+    getPopularMovies(),
+    getMovieGenres(),
+  ]);
 
-const popularMovies = movieData.results;
+  const popularMovies = movieData.results;
+
   return (
     <main className="min-h-screen bg-[#101014] text-[#F5F3F7]">
       {/* Navigation */}
@@ -32,35 +34,27 @@ const popularMovies = movieData.results;
           </a>
 
           <div className="hidden items-center gap-8 text-sm text-[#A5A1AD] md:flex">
-            <a href="/" className="text-white transition hover:text-violet-300">
+            <a
+              href="/"
+              className="text-white transition hover:text-violet-300"
+            >
               Home
             </a>
+
             <a href="#movies" className="transition hover:text-white">
               Movies
             </a>
+
             <a href="#experience" className="transition hover:text-white">
               Experience
             </a>
+
             <WatchlistNavLink />
-
           </div>
 
-          <div className="flex items-center gap-3">
-            <a
-  href="/search"
-  aria-label="Search movies"
-  className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 transition hover:border-violet-400"
->
-  <Search size={19} />
-</a>
-
-            <button
-              type="button"
-              className="hidden rounded-full bg-violet-500 px-5 py-2.5 text-sm font-semibold transition hover:bg-violet-400 sm:block"
-            >
-              Sign In
-            </button>
-          </div>
+          <div className="flex items-center">
+  <AccountNav />
+</div>
         </nav>
       </header>
 
@@ -68,6 +62,7 @@ const popularMovies = movieData.results;
       <section className="page-container py-12 md:py-20">
         <div className="relative overflow-hidden rounded-[28px] border border-white/[0.08] bg-[#17171D]">
           <div className="pointer-events-none absolute -right-24 -top-24 h-80 w-80 rounded-full bg-violet-600/20 blur-[100px]" />
+
           <div className="pointer-events-none absolute -bottom-32 left-1/3 h-72 w-72 rounded-full bg-purple-500/10 blur-[100px]" />
 
           <div className="relative grid min-h-[440px] items-center gap-12 p-8 md:grid-cols-2 md:p-14 lg:p-16">
@@ -107,9 +102,11 @@ const popularMovies = movieData.results;
               </div>
             </div>
 
+            {/* Hero Illustration */}
             <div className="hidden justify-center md:flex">
               <div className="relative flex h-72 w-72 items-center justify-center rounded-full border border-violet-400/20 bg-violet-500/[0.06] lg:h-80 lg:w-80">
                 <div className="absolute inset-5 rounded-full border border-white/[0.06]" />
+
                 <div className="absolute inset-10 rounded-full border border-white/[0.06]" />
 
                 <div className="flex h-36 w-36 items-center justify-center rounded-[32px] border border-violet-300/20 bg-gradient-to-br from-violet-500 to-purple-800 shadow-[0_0_80px_rgba(139,92,246,0.3)]">
@@ -134,9 +131,9 @@ const popularMovies = movieData.results;
       </section>
 
       {/* Movie Discovery */}
-       <section id="movies" className="pb-12">
-  <MovieBrowser movies={popularMovies} genres={genres} />
-</section>
+      <section id="movies" className="pb-12">
+        <MovieBrowser initialMovies={popularMovies} genres={genres} />
+      </section>
 
       {/* Experience */}
       <section
@@ -148,6 +145,7 @@ const popularMovies = movieData.results;
             <p className="text-lg font-bold">
               Your next cinema experience awaits.
             </p>
+
             <p className="mt-2 text-sm text-[#A5A1AD]">
               Discover a better way to find and book your next movie.
             </p>
@@ -166,7 +164,7 @@ const popularMovies = movieData.results;
       {/* Footer */}
       <footer className="border-t border-white/[0.08]">
         <div className="page-container flex flex-col gap-3 py-7 text-xs text-[#A5A1AD] sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getFullYear()} IMovies. All rights reserved.</p>
+          <p>© 2026 IMovies. All rights reserved.</p>
           <p>Made for the love of cinema.</p>
         </div>
       </footer>

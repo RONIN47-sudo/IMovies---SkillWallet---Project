@@ -3,8 +3,23 @@
 import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { getBookings, cancelBooking } from "@/lib/bookings";
-import type { Booking } from "@/lib/bookings";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+
+interface Booking {
+  id: string;
+  booking_reference: string;
+  movie_id: string;
+  cinema_id: string;
+  cinema_name: string;
+  showtime_id: string;
+  show_date: string;
+  total_amount: number;
+  payment_method: string;
+  booking_status: "demo_confirmed" | "cancelled";
+  created_at: string;
+  seats: string[];
+}
 
 interface MovieInfo {
   title: string;
@@ -13,37 +28,147 @@ interface MovieInfo {
 
 const TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w200";
 
-export default function MyBookingsPage() {
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [movieDetails, setMovieDetails] = useState<Record<string, MovieInfo>>(
-    {}
-  );
-  const [isLoading, setIsLoading] = useState(true);
+const paymentMethodLabels: Record<string, string> = {
+  upi: "UPI",
+  card: "Credit / Debit Card",
+  netbanking: "Net Banking",
+  wallet: "Wallet",
+};
 
-  const refreshBookings = useCallback(() => {
-    setBookings(getBookings());
-  }, []);
+export default function MyBookingsPage() {
+  const router = useRouter();
+
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [movieDetails, setMovieDetails] = useState<
+    Record<string, MovieInfo>
+  >({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadingError, setLoadingError] = useState("");
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancellationError, setCancellationError] = useState("");
+
+  const supabase = createClient();
+
+  const refreshBookings = useCallback(async () => {
+    setIsLoading(true);
+    setLoadingError("");
+
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        router.replace(
+          `/login?next=${encodeURIComponent("/my-bookings")}`
+        );
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("bookings")
+        .select(`
+          id,
+          booking_reference,
+          movie_id,
+          cinema_id,
+          cinema_name,
+          showtime_id,
+          show_date,
+          total_amount,
+          payment_method,
+          booking_status,
+          created_at
+        `)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("Unable to load bookings:", error);
+        throw new Error(error.message);
+      }
+
+      const bookingRows = data ?? [];
+
+      // Fetch the seats for these bookings separately.
+      const bookingIds = bookingRows.map((booking) => booking.id);
+
+      let seatsByBooking: Record<string, string[]> = {};
+
+      if (bookingIds.length > 0) {
+        const { data: seatRows, error: seatsError } = await supabase
+          .from("booking_seats")
+          .select("booking_id, seat_number")
+          .in("booking_id", bookingIds);
+
+        if (seatsError) {
+          console.error("Unable to load booking seats:", seatsError);
+          throw new Error(seatsError.message);
+        }
+
+        seatsByBooking = (seatRows ?? []).reduce<
+          Record<string, string[]>
+        >((result, seat) => {
+          if (!result[seat.booking_id]) {
+            result[seat.booking_id] = [];
+          }
+
+          result[seat.booking_id].push(seat.seat_number);
+          return result;
+        }, {});
+      }
+
+      const mappedBookings: Booking[] = bookingRows.map((booking) => ({
+        id: booking.id,
+        booking_reference: booking.booking_reference,
+        movie_id: booking.movie_id,
+        cinema_id: booking.cinema_id,
+        cinema_name: booking.cinema_name,
+        showtime_id: booking.showtime_id,
+        show_date: booking.show_date,
+        total_amount: Number(booking.total_amount),
+        payment_method: booking.payment_method,
+        booking_status: booking.booking_status,
+        created_at: booking.created_at,
+        seats: (seatsByBooking[booking.id] ?? []).sort((a, b) => {
+          const rowA = a.match(/^[A-P]/)?.[0] ?? "";
+          const rowB = b.match(/^[A-P]/)?.[0] ?? "";
+
+          if (rowA !== rowB) {
+            return rowA.localeCompare(rowB);
+          }
+
+          return Number(a.slice(1)) - Number(b.slice(1));
+        }),
+      }));
+
+      setBookings(mappedBookings);
+    } catch (error) {
+      console.error("My Bookings error:", error);
+
+      setLoadingError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load your bookings. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }, [router, supabase]);
 
   useEffect(() => {
-    refreshBookings();
-    setIsLoading(false);
-
-    const handleBookingsUpdated = () => refreshBookings();
-
-    window.addEventListener("bookings-updated", handleBookingsUpdated);
-
-    return () => {
-      window.removeEventListener("bookings-updated", handleBookingsUpdated);
-    };
+    void refreshBookings();
   }, [refreshBookings]);
 
+  // Load movie titles and posters from the existing movie API.
   useEffect(() => {
     let cancelled = false;
 
     async function loadMovieDetails() {
-      const movieIds = [...new Set(bookings.map((booking) => booking.movieId))]
-        .filter(Boolean)
-        .filter((id) => !movieDetails[id]);
+      const movieIds = [
+        ...new Set(bookings.map((booking) => booking.movie_id)),
+      ].filter((id) => id && !movieDetails[id]);
 
       if (movieIds.length === 0) return;
 
@@ -80,7 +205,9 @@ export default function MyBookingsPage() {
         const updated = { ...previous };
 
         for (const result of results) {
-          if (result) updated[result.id] = result.movie;
+          if (result) {
+            updated[result.id] = result.movie;
+          }
         }
 
         return updated;
@@ -93,6 +220,53 @@ export default function MyBookingsPage() {
       cancelled = true;
     };
   }, [bookings, movieDetails]);
+
+  async function handleCancelBooking(booking: Booking) {
+    const confirmed = window.confirm(
+      `Cancel demo booking ${booking.booking_reference}?`
+    );
+
+    if (!confirmed) return;
+
+    setCancellingId(booking.id);
+    setCancellationError("");
+
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        router.replace(
+          `/login?next=${encodeURIComponent("/my-bookings")}`
+        );
+        return;
+      }
+
+      const { error } = await supabase.rpc("cancel_demo_booking", {
+        p_booking_id: booking.id,
+      });
+
+      if (error) {
+        console.error("Unable to cancel booking:", error);
+        throw new Error(error.message);
+      }
+
+      // Refresh the data from Supabase.
+      await refreshBookings();
+    } catch (error) {
+      console.error("Booking cancellation error:", error);
+
+      setCancellationError(
+        error instanceof Error
+          ? error.message
+          : "Unable to cancel this booking. Please try again."
+      );
+    } finally {
+      setCancellingId(null);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[#101014] px-5 py-12 text-[#F5F3F7] sm:px-8">
@@ -118,8 +292,37 @@ export default function MyBookingsPage() {
           </p>
         </header>
 
+        {cancellationError && (
+          <div
+            role="alert"
+            className="mt-6 rounded-xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-300"
+          >
+            {cancellationError}
+          </div>
+        )}
+
         {isLoading ? (
-          <p className="mt-10 text-[#A5A1AD]">Loading your bookings...</p>
+          <p className="mt-10 text-[#A5A1AD]">
+            Loading your bookings...
+          </p>
+        ) : loadingError ? (
+          <section className="mt-10 rounded-2xl border border-red-400/20 bg-[#17171D] p-8 text-center">
+            <h2 className="text-xl font-semibold">
+              Unable to load bookings
+            </h2>
+
+            <p className="mt-3 break-words text-sm text-red-300">
+              {loadingError}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => void refreshBookings()}
+              className="mt-6 rounded-xl bg-violet-500 px-6 py-3 font-semibold text-white transition hover:bg-violet-400"
+            >
+              Try Again
+            </button>
+          </section>
         ) : bookings.length === 0 ? (
           <section className="mt-10 rounded-2xl border border-white/10 bg-[#17171D] p-8 text-center sm:p-12">
             <h2 className="text-xl font-semibold">No bookings yet</h2>
@@ -138,15 +341,18 @@ export default function MyBookingsPage() {
         ) : (
           <div className="mt-10 space-y-5">
             {bookings.map((booking) => {
-              const movie = movieDetails[booking.movieId];
+              const movie = movieDetails[booking.movie_id];
 
               const posterUrl = movie?.poster_path
                 ? `${TMDB_IMAGE_BASE_URL}${movie.poster_path}`
                 : null;
 
+              const isConfirmed =
+                booking.booking_status === "demo_confirmed";
+
               return (
                 <article
-                  key={booking.bookingId}
+                  key={booking.id}
                   className="rounded-2xl border border-white/10 bg-[#17171D] p-6 sm:p-8"
                 >
                   <div className="flex flex-col gap-6 sm:flex-row">
@@ -154,7 +360,7 @@ export default function MyBookingsPage() {
                       {posterUrl ? (
                         <Image
                           src={posterUrl}
-                          alt={`${movie.title} poster`}
+                          alt={`${movie?.title ?? "Movie"} poster`}
                           fill
                           sizes="112px"
                           className="object-cover"
@@ -170,30 +376,35 @@ export default function MyBookingsPage() {
                       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-wider text-violet-400">
-                            Booking ID
+                            Booking Reference
                           </p>
 
                           <p className="mt-2 break-all font-mono text-sm">
-                            {booking.bookingId}
+                            {booking.booking_reference}
+                          </p>
+
+                          <p className="mt-1 break-all text-xs text-[#A5A1AD]">
+                            ID: {booking.id}
                           </p>
 
                           <h2 className="mt-4 text-xl font-semibold">
-                            {movie?.title || `Movie ID: ${booking.movieId}`}
+                            {movie?.title || `Movie ID: ${booking.movie_id}`}
                           </h2>
 
                           <p className="mt-2 text-sm text-[#A5A1AD]">
-                            {booking.cinemaName || "Cinema details unavailable"}
+                            {booking.cinema_name ||
+                              "Cinema details unavailable"}
                           </p>
                         </div>
 
                         <span
                           className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${
-                            booking.status === "confirmed"
+                            isConfirmed
                               ? "bg-emerald-400/10 text-emerald-300"
                               : "bg-red-400/10 text-red-300"
                           }`}
                         >
-                          {booking.status === "confirmed"
+                          {isConfirmed
                             ? "CONFIRMED · DEMO"
                             : "CANCELLED"}
                         </span>
@@ -203,14 +414,16 @@ export default function MyBookingsPage() {
                         <div>
                           <p className="text-sm text-[#A5A1AD]">Date</p>
                           <p className="mt-1 font-medium">
-                            {booking.date || "Not specified"}
+                            {booking.show_date || "Not specified"}
                           </p>
                         </div>
 
                         <div>
-                          <p className="text-sm text-[#A5A1AD]">Showtime ID</p>
-                          <p className="mt-1 font-medium">
-                            {booking.showtimeId || "Not specified"}
+                          <p className="text-sm text-[#A5A1AD]">
+                            Showtime ID
+                          </p>
+                          <p className="mt-1 break-all font-medium">
+                            {booking.showtime_id || "Not specified"}
                           </p>
                         </div>
 
@@ -224,9 +437,11 @@ export default function MyBookingsPage() {
                         </div>
 
                         <div>
-                          <p className="text-sm text-[#A5A1AD]">Demo Amount</p>
+                          <p className="text-sm text-[#A5A1AD]">
+                            Demo Amount
+                          </p>
                           <p className="mt-1 font-semibold text-violet-300">
-                            ₹{booking.total.toFixed(2)}
+                            ₹{booking.total_amount.toFixed(2)}
                           </p>
                         </div>
 
@@ -235,35 +450,33 @@ export default function MyBookingsPage() {
                             Payment Method
                           </p>
                           <p className="mt-1 font-medium">
-                            {booking.paymentMethod}
+                            {paymentMethodLabels[
+                              booking.payment_method.toLowerCase()
+                            ] ?? booking.payment_method}
                           </p>
                         </div>
 
                         <div>
                           <p className="text-sm text-[#A5A1AD]">Booked At</p>
                           <p className="mt-1 text-sm font-medium">
-                            {new Date(booking.bookedAt).toLocaleString()}
+                            {new Date(booking.created_at).toLocaleString(
+                              "en-IN"
+                            )}
                           </p>
                         </div>
                       </div>
 
-                      {booking.status === "confirmed" && (
+                      {isConfirmed && (
                         <div className="mt-6 border-t border-white/10 pt-5">
                           <button
                             type="button"
-                            onClick={() => {
-                              const confirmed = window.confirm(
-                                "Cancel this demo booking?"
-                              );
-
-                              if (!confirmed) return;
-
-                              cancelBooking(booking.bookingId);
-                              refreshBookings();
-                            }}
-                            className="rounded-lg border border-red-400/30 px-4 py-2 text-sm font-medium text-red-300 transition hover:bg-red-400/10"
+                            disabled={cancellingId === booking.id}
+                            onClick={() => void handleCancelBooking(booking)}
+                            className="rounded-lg border border-red-400/30 px-4 py-2 text-sm font-medium text-red-300 transition hover:bg-red-400/10 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            Cancel Demo Booking
+                            {cancellingId === booking.id
+                              ? "Cancelling..."
+                              : "Cancel Demo Booking"}
                           </button>
                         </div>
                       )}
@@ -276,7 +489,7 @@ export default function MyBookingsPage() {
         )}
 
         <p className="mt-8 text-xs leading-5 text-[#A5A1AD]">
-          These records are stored in this browser&apos;s local storage. They
+          These records are retrieved from your account in Supabase. They
           represent demo bookings only, not real cinema reservations or
           completed payments.
         </p>
